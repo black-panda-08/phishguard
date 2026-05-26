@@ -15,3 +15,8 @@ PhishGuard is a web-based phishing detection system that uses machine learning t
 - URL feature extraction
 - Interactive HTML frontend
 - Confidence score for predictions
+
+## note points
+
+ - must to create key for gemini aistudio.google.com/app/apikey
+ - Give phising url to automated germini detect to give reports
