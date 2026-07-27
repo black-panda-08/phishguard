@@ -188,16 +188,13 @@ body::before {
     <div class="badge"><span class="dot"></span> Gemini AI · Real-Time Analysis</div>
   </div>
 
-  <!-- API KEY -->
+  <!-- MODEL INFO -->
   <div class="api-card">
     <div class="api-header">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-      <span class="api-title">Anthropic API Key</span>
+      <span class="api-title">Local Machine Learning Model</span>
     </div>
-    <div class="api-row">
-      <input class="api-input" id="api-key" type="password" placeholder="AIza..." autocomplete="off" />
-    </div>
-    <div class="api-note">Free API key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a> → Get API Key. Stays in your browser only.</div>
+    <div class="api-note">This detector is powered by your local Random Forest model running on Flask. No external API key is needed. Ensure your backend is running on <code>http://127.0.0.1:5000</code>.</div>
   </div>
 
   <!-- SCAN CARD -->
@@ -390,71 +387,29 @@ function extractFeatures(rawUrl) {
   };
 }
 
-/* ── Claude AI Analysis ──────────────────────────────────────── */
-async function analyseWithClaude(url, features, apiKey) {
-  const featureSummary = `
-URL: ${url}
-Domain: ${features.hostname}
-Known safe domain: ${features.isKnownSafe}
-IP address hostname: ${features.hasIP}
-Uses HTTPS: ${features.hasHTTPS}
-Suspicious TLD: ${features.hasSuspiciousTLD}
-@ symbol in URL: ${features.hasAt}
-Dash in domain: ${features.hasDash}
-Subdomain count: ${features.subdomainCount}
-Numbers in domain: ${features.hasNumbersInDomain}
-Brand impersonation detected: ${features.impersonation}
-URL shortener: ${features.isShortener}
-Suspicious path keywords: ${features.hasSuspiciousPath}
-Double-slash redirect: ${features.hasDoubleSlash}
-Long domain (>30 chars): ${features.longDomain}
-Punycode/IDN: ${features.hasPunycode}
-Non-standard port: ${features.hasPort}
-URL length: ${features.urlLength} chars
-Heuristic risk score: ${features.risk}/100
-`.trim();
-
-  const prompt = `You are an expert URL phishing analyst. Analyse the following URL and its extracted features.
-
-${featureSummary}
-
-Respond in this EXACT JSON format (no markdown, no extra text):
-{
-  "verdict": "safe" or "phishing",
-  "confidence": <integer 0-100>,
-  "summary": "<one clear sentence explaining the verdict>",
-  "key_indicators": ["<indicator 1>", "<indicator 2>", "<indicator 3>"],
-  "risk_level": "low" or "medium" or "high" or "critical"
-}
-
-Rules:
-- If it's a well-known legitimate domain (google, amazon, paypal, etc.) → safe with high confidence
-- Brand impersonation + suspicious TLD = strong phishing signal
-- IP address as hostname is always suspicious
-- Multiple red flags compound risk
-- Be precise and decisive`;
-
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 400 }
-      })
-    }
-  );
+/* ── Backend API Analysis ──────────────────────────────────────── */
+async function analyseWithBackend(url) {
+  const resp = await fetch('http://127.0.0.1:5000/predict', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: url })
+  });
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    throw new Error(err.error?.message || `API error ${resp.status}`);
+    throw new Error(err.error || `Backend error ${resp.status}. Is the Flask app running?`);
   }
 
   const data = await resp.json();
-  const raw  = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  const isSafe = data.result === 'safe';
+  
+  return {
+    verdict: data.result,
+    confidence: data.confidence,
+    summary: isSafe ? "The local machine learning model classified this URL as safe." : "The local machine learning model flagged this URL as suspicious.",
+    key_indicators: ["Analyzed 30 numeric URL features using Random Forest"],
+    risk_level: isSafe ? "low" : (data.confidence > 80 ? "critical" : "high")
+  };
 }
 
 /* ── Render Helpers ──────────────────────────────────────────── */
@@ -554,18 +509,12 @@ function renderError(msg) {
 /* ── Main Scan Logic ─────────────────────────────────────────── */
 async function scan() {
   const url    = inputEl.value.trim();
-  const apiKey = document.getElementById('api-key').value.trim();
 
   if (!url) { renderError('Please enter a URL to scan.'); return; }
 
   // Basic URL sanity
   const testUrl = url.startsWith('http') ? url : 'https://' + url;
   try { new URL(testUrl); } catch { renderError('Please enter a valid URL (e.g. https://example.com).'); return; }
-
-  if (!apiKey) {
-    renderError('Please enter your Anthropic API key above to enable AI analysis.');
-    return;
-  }
 
   btnEl.disabled = true;
   renderLoading();
@@ -574,7 +523,7 @@ async function scan() {
     const features = extractFeatures(testUrl);
     if (!features) throw new Error('Could not parse URL structure.');
 
-    const aiResult  = await analyseWithClaude(testUrl, features, apiKey);
+    const aiResult  = await analyseWithBackend(testUrl);
 
     renderResult(testUrl, aiResult, features);
 
